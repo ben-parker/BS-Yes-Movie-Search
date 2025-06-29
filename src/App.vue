@@ -14,11 +14,18 @@
           </v-list>
         </div>
 
+        <div class="bsyes-logo-wrapper mb-8">
+          <v-img src="/bsyes.png" alt="BS!Yes! Movie Search" contain class="bsyes-logo"></v-img>
+        </div>
+
         <div class="movie-search mx-auto" style="max-width: 500px;">
-          <v-img src="@/assets/bsyes.png" alt="BS!Yes! Movie Search" contain max-height="150" class="mx-auto mb-4"></v-img>
+          <v-btn-toggle v-model="searchType" mandatory class="mb-4">
+            <v-btn value="movie">Movies</v-btn>
+            <v-btn value="tv">TV Shows</v-btn>
+          </v-btn-toggle>
           <v-text-field
             v-model="searchQuery"
-            label="Search for a movie..."
+            :label="`Search for a ${searchType}...`"
             variant="outlined"
             clearable
             @update:model-value="debouncedSearch"
@@ -27,15 +34,15 @@
 
         <v-list v-if="results.length > 0" class="search-results mx-auto bg-transparent" style="max-width: 800px;">
           <v-list-item
-            v-for="movie in results"
-            :key="movie.id"
+            v-for="item in results"
+            :key="item.id"
             class="my-4 pa-0"
           >
             <v-card variant="outlined">
               <div class="d-flex">
                 <div>
                   <v-img
-                    :src="moviePosterUrl(movie)"
+                    :src="itemPosterUrl(item)"
                     width="120"
                     height="180"
                     cover
@@ -49,12 +56,12 @@
                   </v-img>
                 </div>
                 <div class="d-flex flex-column flex-grow-1 pa-4">
-                  <div class="text-h6">{{ movieTitle(movie) }}</div>
-                  <div class="text-body-2 mt-2 overview-text">{{ movie.overview }}</div>
+                  <div class="text-h6">{{ itemTitle(item) }}</div>
+                  <div class="text-body-2 mt-2 overview-text">{{ item.overview }}</div>
                   <v-spacer></v-spacer>
                   <div class="d-flex align-center mt-4">
                     <v-btn
-                      v-if="movie.in_library"
+                      v-if="item.in_library"
                       color="success"
                       variant="tonal"
                       disabled
@@ -63,19 +70,19 @@
                     </v-btn>
                     <v-btn
                       v-else
-                      :loading="movie.downloading"
-                      :disabled="movie.downloading"
+                      :loading="item.downloading"
+                      :disabled="item.downloading"
                       color="primary"
-                      @click="sendToDownloadClient(movie)"
+                      @click="sendToDownloadClient(item)"
                     >
                       Download
                     </v-btn>
                     <v-alert
-                      v-if="movie.error"
+                      v-if="item.error"
                       type="error"
                       density="compact"
                       class="ml-4"
-                      :text="movie.error"
+                      :text="item.error"
                       variant="tonal"
                     ></v-alert>
                   </div>
@@ -91,48 +98,34 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import axios from 'axios';
+import { searchTmdb } from './api/tmdb';
+import { checkRadarrLibrary, sendToRadarr, getRadarrQueue } from './api/radarr';
+import { searchTheTvDb } from './api/thetvdb';
+import { checkSonarrLibrary, sendToSonarr, getSonarrQueue } from './api/sonarr';
 
 const searchQuery = ref('');
 const results = ref([]);
 const queue = ref([]);
+const searchType = ref('movie'); // 'movie' or 'tv'
 let searchTimer = null;
 
-// Environment variables for API keys
-const radarrApiKey = process.env.VUE_APP_RADARR_API_KEY;
-const tmdbApiKey = process.env.VUE_APP_API;
-
-// API URLs
-const radarrApiUrl = `http://localhost:7878/api/movie?apikey=${radarrApiKey}`;
-const tmdbApiUrl = `https://api.themoviedb.org/3/search/movie?api_key=${tmdbApiKey}&language=en-US&query=`;
-const radarrQueueUrl = `http://localhost:7878/api/queue?apikey=${radarrApiKey}`;
-
-const moviePosterUrl = (movie) => {
-  if (!movie.poster_path) return ''; // Return empty string for v-img to show placeholder
-  return `https://image.tmdb.org/t/p/w185_and_h278_bestv2${movie.poster_path}`;
+const itemPosterUrl = (item) => {
+  if (searchType.value === 'movie') {
+    if (!item.poster_path) return '';
+    return `https://image.tmdb.org/t/p/w185_and_h278_bestv2${item.poster_path}`;
+  } else {
+    // TheTVDB provides a full URL for the poster
+    return item.poster_path || 'https://via.placeholder.com/120x180';
+  }
 };
 
-const movieTitle = (movie) => {
-  const year = movie.release_date ? movie.release_date.slice(0, 4) : 'N/A';
-  return `${movie.original_title} (${year})`;
-};
-
-const checkLibrary = async (movies) => {
-  try {
-    const libraryResponse = await axios.get(radarrApiUrl);
-    const library = libraryResponse.data;
-
-    const moviesWithLibraryInfo = movies.map(m => ({
-      ...m,
-      in_library: library.some(l => l.tmdbId === m.id),
-      downloading: false,
-      error: ''
-    }));
-    
-    results.value = moviesWithLibraryInfo;
-  } catch (error) {
-    console.error('Error checking Radarr library:', error);
-    // Optionally, set an error state to show in the UI
+const itemTitle = (item) => {
+  if (searchType.value === 'movie') {
+    const year = item.release_date ? item.release_date.slice(0, 4) : 'N/A';
+    return `${item.original_title} (${year})`;
+  } else {
+    // Placeholder for TV show title
+    return item.name;
   }
 };
 
@@ -143,14 +136,16 @@ const doSearch = async () => {
   }
 
   try {
-    const response = await axios.get(tmdbApiUrl + searchQuery.value);
-    const filteredResults = response.data.results
-      .filter(m => m.release_date)
-      .slice(0, 5);
-    
-    await checkLibrary(filteredResults);
+    let searchResults;
+    if (searchType.value === 'movie') {
+      searchResults = await searchTmdb(searchQuery.value);
+      results.value = await checkRadarrLibrary(searchResults);
+    } else {
+      searchResults = await searchTheTvDb(searchQuery.value);
+      results.value = await checkSonarrLibrary(searchResults);
+    }
   } catch (error) {
-    console.error('Error searching TMDB:', error);
+    console.error(`Error during ${searchType.value} search:`, error);
   }
 };
 
@@ -161,46 +156,37 @@ const debouncedSearch = () => {
   searchTimer = setTimeout(doSearch, 500);
 };
 
-const sendToDownloadClient = async (movie) => {
-  movie.downloading = true;
-  movie.error = '';
-
-  const options = {
-    title: movie.original_title,
-    qualityProfileId: 1, // This might need to be configurable
-    titleSlug: `${movie.original_title.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-')}-${movie.id}`,
-    images: [{
-      covertype: 'poster',
-      url: `https://image.tmdb.org/t/p/original${movie.poster_path}`
-    }],
-    tmdbId: movie.id,
-    year: parseInt(movie.release_date.slice(0, 4)),
-    rootFolderPath: 'V:/Movies/', // This should be configured in Radarr, not here
-    addOptions: { searchForMovie: true }
-  };
+const sendToDownloadClient = async (item) => {
+  item.downloading = true;
+  item.error = '';
 
   try {
-    await axios.post(radarrApiUrl, options);
+    if (searchType.value === 'movie') {
+      await sendToRadarr(item);
+    } else {
+      await sendToSonarr(item);
+    }
     await updateQueue();
   } catch (error) {
-    console.error('Error sending to Radarr:', error);
-    movie.error = 'Download failed.';
+    console.error(`Error sending to ${searchType.value} client:`, error);
+    item.error = 'Download failed.';
   } finally {
     // Keep it loading until the queue updates and shows the item
-    // movie.downloading = false; 
+    // item.downloading = false; 
   }
 };
 
 const updateQueue = async () => {
   try {
-    const response = await axios.get(radarrQueueUrl);
-    queue.value = response.data;
+    const radarrQueue = await getRadarrQueue();
+    const sonarrQueue = await getSonarrQueue();
+    queue.value = [...radarrQueue, ...sonarrQueue];
 
     // If a movie was downloading, check if it's in the queue now
     // and stop the loading spinner.
-    results.value.forEach(movie => {
-      if (movie.downloading && queue.value.some(q => q.movie.tmdbId === movie.id)) {
-        movie.downloading = false;
+    results.value.forEach(item => {
+      if (item.downloading && queue.value.some(q => (q.movie && q.movie.tmdbId === item.id) || (q.series && q.series.tvdbId === item.id))) {
+        item.downloading = false;
         // Optionally, mark as "in queue" instead of just stopping the loader
       }
     });
@@ -223,6 +209,25 @@ onMounted(() => {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.bsyes-logo-wrapper {
+  padding: 0 8px; /* 8px padding on left and right */
+  width: 100%; /* Default to full width on mobile */
+  margin: 0 auto; /* Center the wrapper */
+}
+
+.bsyes-logo {
+  width: 100%; /* Fill the padded wrapper */
+}
+
+@media (min-width: 960px) {
+  .bsyes-logo-wrapper {
+    width: 100%; /* Ensure wrapper takes full width */
+  }
+  .bsyes-logo {
+    margin: 0 auto; /* Center the image */
+  }
 }
 </style>
 
