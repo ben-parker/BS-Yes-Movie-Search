@@ -1,28 +1,14 @@
 {
-  "name": "bsyes",
-  "version": "0.1.0",
+  "name": "bs-yes-movie-search",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
-    "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build",
-    "lint": "vue-cli-service lint"
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview"
   },
   "dependencies": {
-    "core-js": "^3.37.1",
-    "vue": "^3.4.27",
-    "vuetify": "^3.6.8"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.24.7",
-    "@babel/eslint-parser": "^7.24.7",
-    "@vue/cli-plugin-babel": "^5.0.8",
-    "@vue/cli-plugin-eslint": "^5.0.8",
-    "@vue/cli-service": "^5.0.8",
-    "@vue/compiler-sfc": "^3.4.27",
-    "babel-plugin-transform-remove-console": "^6.9.4",
-    "eslint": "^8.57.0",
-    "eslint-plugin-vue": "^9.26.0",
-    "sass": "^1.77.4",
-    "sass-loader": "^14.2.1"
+    "nuxt": "^3.17.5"
   }
 }
