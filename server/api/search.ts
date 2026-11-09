@@ -4,20 +4,25 @@ import { useStorage } from 'nitropack/runtime';
 import { fetchArr } from '../utils/arr-fetch';
 
 const tvdbStorage = useStorage('tvdb');
+const maxTmdbPage = 500;
 
-const getLibraryIds = async (baseUrl: string, apiKey: string, path: string, idField: 'tmdbId' | 'tvdbId') => {
+const getLibraryIds = async (baseUrl: string, apiKey: string, path: string, idField: 'tmdbId' | 'tvdbId', signal: AbortSignal) => {
   if (!baseUrl || !apiKey) return new Set<number>();
 
   try {
-    const records = await fetchArr<Partial<Record<typeof idField, number>>[]>(baseUrl, apiKey, path);
+    const librarySignal = AbortSignal.any([signal, AbortSignal.timeout(3000)]);
+    const records = await fetchArr<Partial<Record<typeof idField, number>>[]>(baseUrl, apiKey, path, {
+      signal: librarySignal,
+    });
     return new Set(records.map(record => record[idField]));
   } catch {
+    signal.throwIfAborted();
     console.error(`Error fetching library at ${path}`);
     return new Set<number>();
   }
 };
 
-const getTvdbToken = async (config) => {
+const getTvdbToken = async (config, signal: AbortSignal) => {
   const cachedToken = await tvdbStorage.getItem('token');
   if (cachedToken && cachedToken.expires > Date.now()) {
     return cachedToken.token;
@@ -25,6 +30,7 @@ const getTvdbToken = async (config) => {
   const response = await $fetch('https://api4.thetvdb.com/v4/login', {
     method: 'POST',
     body: { apikey: config.thetvdbApiKey },
+    signal,
   });
   const token = response.data.token;
   const decodedToken = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
@@ -33,41 +39,37 @@ const getTvdbToken = async (config) => {
   return token;
 };
 
-const searchTmdb = async (query, config) => {
-  const tmdbApiUrl = 'https://api.themoviedb.org/3/search/movie';
+const searchTmdb = async (query, config, page: number, signal: AbortSignal) => {
   const [data, libraryIds] = await Promise.all([
-    $fetch(tmdbApiUrl, { params: { api_key: config.tmdbApiKey, query: query } }),
-    getLibraryIds(config.radarrUrl, config.radarrApiKey, '/movie', 'tmdbId')
+    $fetch('https://api.themoviedb.org/3/search/movie', {
+      params: { api_key: config.tmdbApiKey, query, page },
+      signal,
+    }),
+    getLibraryIds(config.radarrUrl, config.radarrApiKey, '/movie', 'tmdbId', signal),
   ]);
 
-  const topTenRelevant = data.results
-    .filter(m => m.release_date)
-    .slice(0, 10);
+  const results = data.results.map(movie => ({
+    id: movie.id,
+    title: movie.title,
+    year: movie.release_date?.slice(0, 4) || null,
+    overview: movie.overview,
+    posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
+    inLibrary: libraryIds.has(movie.id),
+  }));
 
-  const sortedByYear = topTenRelevant.sort((a, b) => new Date(b.release_date).getTime() - new Date(a.release_date).getTime());
-
-  return sortedByYear.map(movie => {
-    const inLibrary = libraryIds.has(movie.id);
-    return {
-      id: movie.id,
-      title: movie.title,
-      year: movie.release_date.slice(0, 4),
-      overview: movie.overview,
-      posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      inLibrary: inLibrary,
-    };
-  });
+  return { results, hasMore: page < Math.min(data.total_pages, maxTmdbPage) };
 };
 
-const searchTheTvDb = async (query, config) => {
+const searchTheTvDb = async (query, config, signal: AbortSignal) => {
   const [token, libraryIds] = await Promise.all([
-    getTvdbToken(config),
-    getLibraryIds(config.sonarrUrl, config.sonarrApiKey, '/series', 'tvdbId')
+    getTvdbToken(config, signal),
+    getLibraryIds(config.sonarrUrl, config.sonarrApiKey, '/series', 'tvdbId', signal)
   ]);
   
   const thetvdbApiUrl = 'https://api4.thetvdb.com/v4';
   const searchData = await $fetch(`${thetvdbApiUrl}/search`, {
     params: { query, type: 'series' },
+    signal,
     headers: { 'Authorization': `Bearer ${token}` },
   });
 
@@ -79,10 +81,12 @@ const searchTheTvDb = async (query, config) => {
     topTenRelevant.map(async (show) => {
       try {
         const extendedData = await $fetch(`${thetvdbApiUrl}/series/${show.tvdb_id}/extended`, {
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal,
         });
         return { ...show, seasons: extendedData.data.seasons };
       } catch {
+        signal.throwIfAborted();
         console.error(`Failed to fetch extended data for ${show.name}`);
         return { ...show, seasons: [] };
       }
@@ -114,15 +118,30 @@ const searchTheTvDb = async (query, config) => {
 };
 
 export default defineEventHandler(async (event) => {
-  const { type, query } = getQuery(event);
-  if (!query) return [];
+  const { type, query, page: requestedPage } = getQuery(event);
+  const paginated = type === 'movie' && requestedPage !== undefined;
+  const page = paginated ? Number(requestedPage) : 1;
+  if (!Number.isInteger(page) || page < 1 || page > maxTmdbPage) {
+    throw createError({ statusCode: 400, statusMessage: 'Invalid movie search page' });
+  }
+  if (!query) return paginated ? { results: [], hasMore: false } : [];
+
   const config = useRuntimeConfig(event);
+  const controller = new AbortController();
+  const abortSearch = () => controller.abort();
+  event.node.res.once('close', abortSearch);
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
+
   try {
-    if (type === 'movie') return await searchTmdb(query, config);
-    return await searchTheTvDb(query, config);
+    if (type === 'movie') {
+      const result = await searchTmdb(query, config, page, signal);
+      return paginated ? result : result.results;
+    }
+    return await searchTheTvDb(query, config, signal);
   } catch {
+    controller.abort();
     throw createError({ statusCode: 502, statusMessage: 'Search service unavailable' });
+  } finally {
+    event.node.res.off('close', abortSearch);
   }
 });
-
-

@@ -4,7 +4,7 @@ export function fetchArr<T>(
   baseUrl: string,
   apiKey: string,
   path: string,
-  options?: Pick<FetchOptions, 'method' | 'body'>,
+  options?: Pick<FetchOptions, 'method' | 'body' | 'signal'>,
 ) {
   if (!baseUrl || !apiKey) {
     throw new Error('Arr service URL or API key is not configured');

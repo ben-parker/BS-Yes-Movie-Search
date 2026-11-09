@@ -1,54 +1,34 @@
 <template>
-  <div class="card">
-    <div class="d-flex">
-      <div class="poster-container">
-        <img
-          v-if="item.posterUrl"
-          :src="item.posterUrl"
-          width="120"
-          height="180"
-          class="ma-2 rounded"
-        >
-        <div v-else class="ma-2 rounded missing-poster">
-          <span>?</span>
-        </div>
-      </div>
-      <div class="d-flex flex-column flex-grow-1 pa-4">
-        <div class="text-h6">{{ title }}</div>
-        <div class="text-body-2 mt-2 overview-text">{{ item.overview }}</div>
-        <div class="spacer"></div>
-        <div class="d-flex align-center mt-4">
-          <button
-            v-if="item.inLibrary"
-            class="btn btn-success"
-            disabled
-          >
-            In Library
-          </button>
-          <button
-            v-else
-            :disabled="item.submitting"
-            class="btn btn-primary"
-            @click="download"
-          >
-            <span v-if="item.submitting" class="loader"></span>
-            <span v-else>Download</span>
-          </button>
-          <div
-            v-if="item.error"
-            class="alert alert-error ml-4"
-          >
-            {{ item.error }}
-          </div>
-        </div>
+  <article class="card">
+    <img
+      v-if="item.posterUrl"
+      :src="item.posterUrl"
+      alt=""
+      width="120"
+      height="180"
+      loading="lazy"
+      decoding="async"
+      class="poster"
+    >
+    <div v-else class="poster missing-poster" aria-hidden="true">?</div>
+
+    <div class="card-content">
+      <h2 class="title">{{ item.title }}</h2>
+      <span class="release-year">{{ item.year || 'Year unknown' }}</span>
+      <p v-if="item.overview" class="overview">{{ item.overview }}</p>
+
+      <div class="actions">
+        <span v-if="item.inLibrary" class="library-status">In Library</span>
+        <button v-else type="button" class="download-button" :disabled="item.submitting" @click="download">
+          {{ item.submitting ? 'Submitting…' : 'Download' }}
+        </button>
+        <span v-if="item.error" class="download-error" role="alert">{{ item.error }}</span>
       </div>
     </div>
-  </div>
+  </article>
 </template>
 
 <script setup>
-import { computed } from 'vue';
-
 const props = defineProps({
   item: {
     type: Object,
@@ -58,8 +38,6 @@ const props = defineProps({
 
 const emit = defineEmits(['download']);
 
-const title = computed(() => `${props.item.title} (${props.item.year})`);
-
 const download = () => {
   emit('download', props.item);
 };
@@ -67,151 +45,113 @@ const download = () => {
 
 <style scoped>
 .card {
-  background-color: #ffffff;
-  border: 1px solid #E0E0E0;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  display: grid;
+  grid-template-columns: var(--result-poster-width, 120px) minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  background: #fff;
 }
 
-.poster-container {
-  width: 120px;
-  height: 180px;
-  flex-shrink: 0;
-  margin: 0.5rem;
+.poster {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .missing-poster {
-  width: 100%;
-  height: 100%;
-  background-color: #E0E0E0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #FFFFFF;
-  font-size: 4rem;
-  font-weight: bold;
+  display: grid;
+  place-items: center;
+  background: #eee;
+  color: #777;
+  font-size: 1.5rem;
 }
 
-.d-flex {
+.card-content {
   display: flex;
-}
-
-.flex-column {
   flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.flex-grow-1 {
-  flex-grow: 1;
-}
-
-.align-center {
-  align-items: center;
-}
-
-.ma-2 {
+.title {
   margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.25;
 }
 
-.rounded {
-  border-radius: 4px;
-}
-
-.pa-4 {
-  padding: 1rem;
-}
-
-.mt-2 {
-  margin-top: 0.5rem;
-}
-
-.mt-4 {
-  margin-top: 1rem;
-}
-
-.ml-4 {
-  margin-left: 1rem;
-}
-
-.text-h6 {
-  font-size: 1.25rem;
-  font-weight: 500;
-  line-height: 1.6rem;
-  letter-spacing: 0.0125em;
-  color: #212121;
-}
-
-.text-body-2 {
+.release-year {
+  margin-top: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 6px;
+  background: #e9eef4;
+  color: #26394e;
   font-size: 0.875rem;
-  font-weight: 400;
-  line-height: 1.25rem;
-  letter-spacing: 0.0178571429em;
-  color: #616161;
+  font-weight: 700;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 
-.overview-text {
+.overview {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  margin: 0.5rem 0 0;
+  color: #555;
+  font-size: 0.875rem;
+  line-height: 1.4;
 }
 
-.spacer {
-  flex-grow: 1;
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.625rem;
 }
 
-.btn {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 4px;
+.download-button,
+.library-status {
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.download-button {
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: #1458a6;
+  color: #fff;
+  font-family: inherit;
   cursor: pointer;
-  font-weight: 500;
-  text-transform: uppercase;
-  transition: background-color 0.3s, opacity 0.3s;
 }
 
-.btn:disabled {
-  cursor: not-allowed;
+.download-button:focus-visible {
+  outline: 2px solid #1458a6;
+  outline-offset: 2px;
+}
+
+.download-button:disabled {
   opacity: 0.7;
+  cursor: wait;
 }
 
-.btn-primary {
-  background-color: #1976D2;
-  color: #ffffff;
+.library-status {
+  padding: 0.375rem 0.625rem;
+  background: #e8f3e9;
+  color: #22552b;
 }
 
-.btn-primary:not(:disabled):hover {
-  background-color: #1565C0;
-}
-
-.btn-success {
-  background-color: #4CAF50;
-  color: #ffffff;
-}
-
-.alert {
-  padding: 0.75rem 1rem;
-  border-radius: 4px;
-}
-
-.alert-error {
-  background-color: #D32F2F;
-  color: #ffffff;
-}
-
-.loader {
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #1976D2;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  animation: spin 1s linear infinite;
-  display: inline-block;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+.download-error {
+  color: #9b2318;
+  font-size: 0.875rem;
 }
 </style>

@@ -4,64 +4,85 @@
       <div class="container">
         <DownloadQueue :queue="queue" />
 
-        <div class="bsyes-logo-wrapper mb-8">
+        <div class="bsyes-logo-wrapper">
           <img src="/images/bsyes.png" alt="BS!Yes! Movie Search" class="bsyes-logo">
         </div>
 
-        <div class="search-container mx-auto" style="max-width: 800px;">
-          <div class="search-wrapper">
+        <div class="search-container">
+          <form class="search-wrapper" role="search" @submit.prevent="submitSearch">
             <input
+              ref="searchInput"
               v-model="searchQuery"
-              type="text"
-              placeholder="Search for a movie or tv show..."
+              type="search"
+              :aria-label="activeSearch.placeholder"
+              :placeholder="activeSearch.placeholder"
+              enterkeyhint="search"
               class="search-input"
-              @input="debouncedSearch"
             >
-            <div v-if="isLoading" class="spinner" />
-            <button v-else-if="searchQuery" class="clear-button" @click="clearSearch">
+            <button
+              v-if="searchQuery"
+              type="button"
+              class="clear-button"
+              aria-label="Clear search"
+              @click="clearSearch"
+            >
               &times;
             </button>
-          </div>
+          </form>
 
-          <div v-if="isLoading" class="toggle-wrapper mt-4">
-            <div class="ghost-button" />
-            <div class="ghost-button" />
-          </div>
-          <div v-else-if="hasResults" class="toggle-wrapper mt-4">
+          <div class="toggle-wrapper" role="group" aria-label="Search type">
             <button
               v-for="(search, type) in searches"
               :key="type"
-              :class="{ active: activeSearchType === type }"
-              :disabled="search.results.length === 0"
-              @click="activeSearchType = type"
+              type="button"
+              :aria-pressed="activeSearchType === type"
+              @click="selectSearchType(type)"
             >
-              <span v-if="search.failed" class="error-indicator">&times;</span>
-              {{ search.label }} ({{ search.results.length }})
+              {{ search.label }}
             </button>
           </div>
-        </div>
 
-        <ul v-if="isLoading" class="search-results mx-auto" style="max-width: 800px;">
-          <li v-for="n in 5" :key="n" class="my-4 pa-0">
-            <GhostLoaderCard />
-          </li>
-        </ul>
-        <div v-else-if="hasResults">
-          <ul
-            v-for="(search, type) in searches"
-            v-show="activeSearchType === type"
-            :key="type"
-            class="search-results mx-auto"
-            style="max-width: 800px;"
+          <p class="visually-hidden" role="status">{{ searchAnnouncement }}</p>
+          <section
+            v-if="query"
+            :aria-label="activeSearch.label + ' results'"
+            :aria-busy="activeSearch.status === 'loading' || activeSearch.loadingMore"
           >
-            <li
-              v-for="item in search.results"
-              :key="item.id"
-              class="my-4 pa-0"
-            >
-              <SearchResultCard :item="item" @download="handleDownload($event, type)" />
-            </li>
-          </ul>
+            <template v-if="activeSearch.status === 'loading'">
+              <p class="loading-label" aria-hidden="true">Searching {{ activeSearch.subject }}…</p>
+              <ul class="search-results" aria-hidden="true">
+                <li v-for="n in 3" :key="n"><GhostLoaderCard /></li>
+              </ul>
+            </template>
+
+            <div v-else-if="activeSearch.status === 'error'" class="search-message">
+              <h2>Search unavailable</h2>
+              <p>We couldn’t search {{ activeSearch.subject }}. Please try again.</p>
+              <button type="button" class="action-button" @click="submitSearch">Retry search</button>
+            </div>
+
+            <template v-else-if="activeSearch.status === 'ready'">
+              <div v-if="!activeSearch.results.length" class="search-message">
+                <h2>No {{ activeSearch.subject }} found</h2>
+                <p>Try a different spelling or a shorter title.</p>
+              </div>
+
+              <ul v-else class="search-results">
+                <li v-for="item in activeSearch.results" :key="item.id">
+                  <SearchResultCard :item="item" @download="handleDownload($event, activeSearchType)" />
+                </li>
+              </ul>
+
+              <div v-if="activeSearch.hasMore" class="pagination">
+                <p v-if="activeSearch.loadingMore" class="loading-more" aria-hidden="true">Loading more movies…</p>
+                <template v-else-if="activeSearch.loadMoreFailed">
+                  <p>Couldn’t load more movies.</p>
+                  <button type="button" class="action-button" @click="runSearch(true)">Retry loading more</button>
+                </template>
+                <div v-else ref="loadMoreTarget" class="load-more-target" aria-hidden="true" />
+              </div>
+            </template>
+          </section>
         </div>
       </div>
     </main>
@@ -75,91 +96,152 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { $fetch } from 'ofetch';
 import DownloadQueue from '~/components/DownloadQueue.vue';
 import SearchResultCard from '~/components/SearchResultCard.vue';
 import GhostLoaderCard from '~/components/GhostLoaderCard.vue';
 import SeasonSelectionModal from '~/components/SeasonSelectionModal.vue';
 
+const emptySearch = () => ({
+  status: 'idle',
+  results: [],
+  page: 1,
+  hasMore: false,
+  loadingMore: false,
+  loadMoreFailed: false,
+});
+
+const searchInput = ref(null);
+const loadMoreTarget = ref(null);
 const searchQuery = ref('');
+const query = computed(() => searchQuery.value.trim());
 const searches = reactive({
-  movie: { label: 'Movies', results: [], failed: false },
-  tv: { label: 'TV Shows', results: [], failed: false },
+  movie: { label: 'Movies', subject: 'movies', placeholder: 'Search movies', ...emptySearch() },
+  tv: { label: 'TV Shows', subject: 'TV shows', placeholder: 'Search TV shows', ...emptySearch() },
 });
 const activeSearchType = ref('movie');
-const isLoading = ref(false);
+const activeSearch = computed(() => searches[activeSearchType.value]);
 const queue = ref([]);
 const selectedTvShow = ref(null);
 let searchTimer = null;
-let ghostLoaderTimer = null;
+let searchController = null;
 let queueTimer = null;
-let searchGeneration = 0;
 let queueGeneration = 0;
 
-const hasResults = computed(() => Object.values(searches).some(search => search.results.length > 0));
-
-const resetResults = () => {
-  for (const search of Object.values(searches)) {
-    search.results = [];
-    search.failed = false;
+const searchAnnouncement = computed(() => {
+  const { status, subject, results, loadingMore, loadMoreFailed } = activeSearch.value;
+  if (status === 'loading') return `Searching ${subject}…`;
+  if (status === 'error') return `Couldn’t search ${subject}. Please try again.`;
+  if (loadingMore) return 'Loading more movies…';
+  if (loadMoreFailed) return 'Couldn’t load more movies.';
+  if (status === 'ready') {
+    return results.length ? `${results.length} results loaded.` : `No ${subject} found.`;
   }
-};
+  return '';
+});
 
-const doSearch = async (query, generation) => {
-  isLoading.value = true;
-  resetResults();
-
-  const entries = Object.entries(searches);
-  const outcomes = await Promise.allSettled(entries.map(([type]) => $fetch('/api/search', {
-    query: { type, query },
-  })));
-  if (generation !== searchGeneration) return;
-
-  outcomes.forEach((outcome, index) => {
-    const [, search] = entries[index];
-    if (outcome.status === 'fulfilled') {
-      search.results = outcome.value;
-    } else {
-      search.failed = true;
-      console.error(`${search.label} search failed:`, outcome.reason);
-    }
-  });
-
-  const firstResult = entries.find(([, search]) => search.results.length > 0);
-  if (firstResult) {
-    activeSearchType.value = firstResult[0];
-  }
-  isLoading.value = false;
-};
-
-const invalidateSearch = () => {
-  searchGeneration++;
+const cancelSearch = () => {
   clearTimeout(searchTimer);
-  clearTimeout(ghostLoaderTimer);
+  const controller = searchController;
+  searchController = null;
+  controller?.abort();
+
+  const search = activeSearch.value;
+  if (search.status === 'loading') search.status = 'idle';
+  search.loadingMore = false;
+};
+
+const runSearch = async (append = false) => {
+  clearTimeout(searchTimer);
+  const type = activeSearchType.value;
+  const search = activeSearch.value;
+  if (!query.value || searchController || (append && !search.hasMore)) return;
+  const page = append ? search.page + 1 : 1;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  searchController = controller;
+
+  if (append) {
+    search.loadingMore = true;
+    search.loadMoreFailed = false;
+  } else {
+    search.status = 'loading';
+  }
+
+  try {
+    const response = await $fetch('/api/search', {
+      query: { type, query: query.value, page: type === 'movie' ? page : undefined },
+      signal: controller.signal,
+      retry: 0,
+    });
+    if (searchController !== controller) return;
+
+    const results = type === 'movie' ? response.results : response;
+    if (append) {
+      const existingIds = new Set(search.results.map(item => item.id));
+      search.results.push(...results.filter(item => !existingIds.has(item.id)));
+    } else {
+      search.results = results;
+    }
+    search.page = page;
+    search.hasMore = type === 'movie' && response.hasMore;
+    search.status = 'ready';
+  } catch (error) {
+    if (searchController !== controller) return;
+
+    if (append) {
+      search.loadMoreFailed = true;
+    } else {
+      search.status = 'error';
+    }
+    console.error(`${search.label} search failed:`, error);
+  } finally {
+    clearTimeout(timeout);
+    if (searchController === controller) {
+      searchController = null;
+      search.loadingMore = false;
+    }
+  }
+};
+
+watch(loadMoreTarget, (target, _, onCleanup) => {
+  if (!target) return;
+
+  const observer = new IntersectionObserver(([entry]) => {
+    if (entry.isIntersecting && loadMoreTarget.value === target) void runSearch(true);
+  }, { rootMargin: '0px 0px 240px 0px' });
+  observer.observe(target);
+  onCleanup(() => observer.disconnect());
+}, { flush: 'post' });
+
+const submitSearch = () => {
+  if (activeSearch.value.status !== 'ready') void runSearch();
+};
+
+const selectSearchType = (type) => {
+  if (type === activeSearchType.value) return;
+
+  cancelSearch();
+  activeSearchType.value = type;
+  if (activeSearch.value.status === 'idle') void runSearch();
 };
 
 const clearSearch = () => {
-  invalidateSearch();
   searchQuery.value = '';
-  resetResults();
-  isLoading.value = false;
+  searchInput.value?.focus();
 };
 
-const debouncedSearch = () => {
-  const query = searchQuery.value;
-  if (!query) {
-    clearSearch();
-    return;
+watch(query, () => {
+  cancelSearch();
+  for (const search of Object.values(searches)) {
+    Object.assign(search, emptySearch());
   }
-
-  invalidateSearch();
-  const generation = searchGeneration;
-  ghostLoaderTimer = setTimeout(() => {
-    isLoading.value = true;
-  }, 300);
-  searchTimer = setTimeout(() => doSearch(query, generation), 1000);
-};
+  if (query.value) {
+    activeSearch.value.status = 'loading';
+    searchTimer = setTimeout(runSearch, 350);
+  }
+}, { flush: 'sync' });
 
 const submitDownload = async (item, type, seasons) => {
   if (item.submitting) return;
@@ -210,14 +292,13 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  invalidateSearch();
+  cancelSearch();
   queueGeneration++;
   clearInterval(queueTimer);
 });
 </script>
 
 <style scoped>
-/* General Styles */
 .app-container {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   background-color: #ffffff;
@@ -234,147 +315,156 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
-.mb-8 {
+.bsyes-logo-wrapper {
+  padding: 0 1rem;
   margin-bottom: 2rem;
 }
 
-.mx-auto {
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.my-4 {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
-}
-
-.mt-4 {
-  margin-top: 1rem;
-}
-
-.pa-0 {
-  padding: 0;
-}
-
-/* Logo */
-.bsyes-logo-wrapper {
-  width: 100%;
-  padding: 0 16px;
-  box-sizing: border-box;
-}
-
 .bsyes-logo {
+  display: block;
   width: 100%;
   height: auto;
-  display: block;
 }
 
-/* Search Container */
 .search-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  max-width: 800px;
+  margin: 0 auto;
+  --result-poster-width: clamp(64px, 21vw, 120px);
 }
 
 .search-wrapper {
   position: relative;
-  width: 100%;
 }
 
 .search-input {
   width: 100%;
-  padding: 0.75rem 2.5rem 0.75rem 1rem;
-  font-size: 1rem;
-  border: 1px solid #E0E0E0;
-  border-radius: 8px;
+  min-height: 48px;
+  padding: 0.75rem 3rem 0.75rem 1rem;
+  font: inherit;
+  border: 1px solid #bdbdbd;
+  border-radius: 12px;
   box-sizing: border-box;
-  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-input::-webkit-search-cancel-button {
+  appearance: none;
 }
 
 .clear-button {
   position: absolute;
-  right: 0.5rem;
-  top: 50%;
-  transform: translateY(-50%);
+  inset: 0 0 0 auto;
+  width: 48px;
+  padding: 0;
   background: transparent;
-  border: none;
+  border: 0;
+  border-radius: 12px;
+  color: #555;
   font-size: 1.5rem;
-  color: #757575;
   cursor: pointer;
-  padding: 0.5rem;
-  line-height: 1;
 }
 
-.spinner {
-  position: absolute;
-  right: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #1976D2;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: translateY(-50%) rotate(0deg); }
-  100% { transform: translateY(-50%) rotate(360deg); }
-}
-
-/* Ghost Button Loader */
-.ghost-button {
-  width: 120px; /* Adjust width as needed */
-  height: 38px; /* Match button height */
-  background-color: #e0e0e0;
-  border-radius: 8px;
-  animation: pulse-bg 1.5s infinite;
-}
-
-@keyframes pulse-bg {
-  0% { background-color: #e0e0e0; }
-  50% { background-color: #f0f0f0; }
-  100% { background-color: #e0e0e0; }
-}
-
-/* Toggle Buttons */
 .toggle-wrapper {
-  display: flex;
-  justify-content: center;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.25rem;
+  border-radius: 12px;
+  background: #f1f1f1;
 }
 
 .toggle-wrapper button {
-  position: relative;
-  padding: 0.5rem 1rem;
-  border: 1px solid #E0E0E0;
-  background-color: #f5f5f5;
+  min-height: 44px;
+  padding: 0.5rem;
+  border: 0;
   border-radius: 8px;
+  background: transparent;
+  color: #424242;
+  font: inherit;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.2s, color 0.2s;
 }
 
-.toggle-wrapper button.active {
-  background-color: #d43e20;
+.toggle-wrapper button[aria-pressed="true"] {
+  background: #b8351b;
   color: #ffffff;
-  border-color: #d43e20;
 }
 
-.toggle-wrapper button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.search-input:focus-visible,
+.clear-button:focus-visible,
+.toggle-wrapper button:focus-visible,
+.action-button:focus-visible {
+  outline: 2px solid #1458a6;
+  outline-offset: 2px;
 }
 
-.error-indicator {
-  color: #D32F2F;
-  font-weight: bold;
-  margin-right: 0.25rem;
-}
-
-/* Search Results */
 .search-results {
-  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
   padding: 0;
+  list-style: none;
+}
+
+.loading-label {
+  margin: 0 0 0.75rem;
+  color: #555;
+  font-size: 0.875rem;
+}
+
+.search-message {
+  padding: 1.5rem 1rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  background: #fafafa;
+  text-align: center;
+}
+
+.search-message h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.search-message p,
+.pagination p {
+  margin: 0.5rem 0 0;
+  color: #555;
+}
+
+.pagination {
+  margin: 1rem 0;
+  text-align: center;
+}
+
+.action-button {
+  min-height: 44px;
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid #1458a6;
+  border-radius: 8px;
+  background: #fff;
+  color: #1458a6;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.load-more-target {
+  height: 1px;
+}
+
+.loading-more {
+  font-size: 0.875rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 </style>
