@@ -4,19 +4,19 @@ This document provides instructions for building and running the application usi
 
 ## 1. Create a `.env` file
 
-Create a `.env` file in the root of the project with the following content:
+For local development, create a `.env` file in the project root with the settings below. For Docker, provide these variables when starting the container.
 
 ```
-VUE_APP_RADARR_API_KEY=your_radarr_api_key
-VUE_APP_RADARR_URL=http://your_radarr_ip:7878
-VUE_APP_RADARR_ROOT_FOLDER_PATH=/path/to/your/radarr/root/folder
-VUE_APP_RADARR_QUALITY_PROFILE_ID=1
-VUE_APP_SONARR_API_KEY=your_sonarr_api_key
-VUE_APP_SONARR_URL=http://your_sonarr_ip:8989
-VUE_APP_SONARR_ROOT_FOLDER_PATH=/path/to/your/sonarr/root/folder
-VUE_APP_SONARR_QUALITY_PROFILE_ID=1
-VUE_APP_MOVIEDB_API_KEY=your_moviedb_api_key
-VUE_APP_TVDB_API_KEY=your_tvdb_api_key
+NUXT_RADARR_API_KEY=your_radarr_api_key
+NUXT_RADARR_URL=http://your_radarr_ip:7878
+NUXT_RADARR_ROOT_FOLDER_PATH=/path/to/your/radarr/root/folder
+NUXT_RADARR_QUALITY_PROFILE_ID=1
+NUXT_SONARR_API_KEY=your_sonarr_api_key
+NUXT_SONARR_URL=http://your_sonarr_ip:8989
+NUXT_SONARR_ROOT_FOLDER_PATH=/path/to/your/sonarr/root/folder
+NUXT_SONARR_QUALITY_PROFILE_ID=1
+NUXT_TMDB_API_KEY=your_moviedb_api_key
+NUXT_THETVDB_API_KEY=your_tvdb_api_key
 ```
 
 ## 2. Build the Docker image
@@ -46,16 +46,15 @@ On your Unraid server, go to the "Docker" tab and click "Add Container". Fill in
 
 Add the following environment variables:
 
--   `VUE_APP_RADARR_API_KEY`
--   `VUE_APP_RADARR_URL`
--   `VUE_APP_RADARR_ROOT_FOLDER_PATH`
--   `VUE_APP_RADARR_QUALITY_PROFILE_ID`
--   `VUE_APP_SONARR_API_KEY`
--   `VUE_APP_SONARR_URL`
--   `VUE_APP_SONARR_ROOT_FOLDER_PATH`
--   `VUE_APP_SONARR_QUALITY_PROFILE_ID`
--   `VUE_APP_MOVIEDB_API_KEY`
--   `VUE_APP_TVDB_API_KEY`
--   `VUE_APP_TVDB_PIN`
+-   `NUXT_RADARR_API_KEY`
+-   `NUXT_RADARR_URL`
+-   `NUXT_RADARR_ROOT_FOLDER_PATH`
+-   `NUXT_RADARR_QUALITY_PROFILE_ID`
+-   `NUXT_SONARR_API_KEY`
+-   `NUXT_SONARR_URL`
+-   `NUXT_SONARR_ROOT_FOLDER_PATH`
+-   `NUXT_SONARR_QUALITY_PROFILE_ID`
+-   `NUXT_TMDB_API_KEY`
+-   `NUXT_THETVDB_API_KEY`
 
 Click "Apply" to start the container.

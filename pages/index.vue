@@ -27,22 +27,16 @@
             <div class="ghost-button" />
             <div class="ghost-button" />
           </div>
-          <div v-else-if="movieResults.length > 0 || tvResults.length > 0" class="toggle-wrapper mt-4">
+          <div v-else-if="hasResults" class="toggle-wrapper mt-4">
             <button
-              :class="{ active: activeSearchType === 'movie' }"
-              :disabled="movieToggleDisabled"
-              @click="activeSearchType = 'movie'"
+              v-for="(search, type) in searches"
+              :key="type"
+              :class="{ active: activeSearchType === type }"
+              :disabled="search.results.length === 0"
+              @click="activeSearchType = type"
             >
-              <span v-if="movieSearchError" class="error-indicator">&times;</span>
-              Movies ({{ movieResults.length }})
-            </button>
-            <button
-              :class="{ active: activeSearchType === 'tv' }"
-              :disabled="tvToggleDisabled"
-              @click="activeSearchType = 'tv'"
-            >
-              <span v-if="tvSearchError" class="error-indicator">&times;</span>
-              TV Shows ({{ tvResults.length }})
+              <span v-if="search.failed" class="error-indicator">&times;</span>
+              {{ search.label }} ({{ search.results.length }})
             </button>
           </div>
         </div>
@@ -52,39 +46,36 @@
             <GhostLoaderCard />
           </li>
         </ul>
-        <div v-else-if="movieResults.length > 0 || tvResults.length > 0">
-          <ul v-show="activeSearchType === 'movie'" class="search-results mx-auto" style="max-width: 800px;">
+        <div v-else-if="hasResults">
+          <ul
+            v-for="(search, type) in searches"
+            v-show="activeSearchType === type"
+            :key="type"
+            class="search-results mx-auto"
+            style="max-width: 800px;"
+          >
             <li
-              v-for="item in movieResults"
+              v-for="item in search.results"
               :key="item.id"
               class="my-4 pa-0"
             >
-              <SearchResultCard :item="item" :search-type="'movie'" @download="handleDownload" />
-            </li>
-          </ul>
-          <ul v-show="activeSearchType === 'tv'" class="search-results mx-auto" style="max-width: 800px;">
-            <li
-              v-for="item in tvResults"
-              :key="item.id"
-              class="my-4 pa-0"
-            >
-              <SearchResultCard :item="item" :search-type="'tv'" @download="handleDownload" />
+              <SearchResultCard :item="item" @download="handleDownload($event, type)" />
             </li>
           </ul>
         </div>
       </div>
     </main>
     <SeasonSelectionModal
-      v-if="showSeasonModal"
+      v-if="selectedTvShow"
       :item="selectedTvShow"
-      @close="showSeasonModal = false"
-      @submit="sendTvShowToDownloadClient"
+      @close="selectedTvShow = null"
+      @submit="submitTvDownload"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { $fetch } from 'ofetch';
 import DownloadQueue from '~/components/DownloadQueue.vue';
 import SearchResultCard from '~/components/SearchResultCard.vue';
@@ -92,150 +83,122 @@ import GhostLoaderCard from '~/components/GhostLoaderCard.vue';
 import SeasonSelectionModal from '~/components/SeasonSelectionModal.vue';
 
 const searchQuery = ref('');
-const movieResults = ref([]);
-const tvResults = ref([]);
+const searches = reactive({
+  movie: { label: 'Movies', results: [], failed: false },
+  tv: { label: 'TV Shows', results: [], failed: false },
+});
 const activeSearchType = ref('movie');
-const movieToggleDisabled = ref(false);
-const tvToggleDisabled = ref(false);
-const movieSearchError = ref(false);
-const tvSearchError = ref(false);
 const isLoading = ref(false);
 const queue = ref([]);
-const showSeasonModal = ref(false);
 const selectedTvShow = ref(null);
 let searchTimer = null;
 let ghostLoaderTimer = null;
+let queueTimer = null;
+let searchGeneration = 0;
+let queueGeneration = 0;
 
-const activeResults = computed(() => {
-  return activeSearchType.value === 'movie' ? movieResults.value : tvResults.value;
-});
+const hasResults = computed(() => Object.values(searches).some(search => search.results.length > 0));
 
-const doSearch = async () => {
-  if (searchQuery.value.length < 1) {
+const resetResults = () => {
+  for (const search of Object.values(searches)) {
+    search.results = [];
+    search.failed = false;
+  }
+};
+
+const doSearch = async (query, generation) => {
+  isLoading.value = true;
+  resetResults();
+
+  const entries = Object.entries(searches);
+  const outcomes = await Promise.allSettled(entries.map(([type]) => $fetch('/api/search', {
+    query: { type, query },
+  })));
+  if (generation !== searchGeneration) return;
+
+  outcomes.forEach((outcome, index) => {
+    const [, search] = entries[index];
+    if (outcome.status === 'fulfilled') {
+      search.results = outcome.value;
+    } else {
+      search.failed = true;
+      console.error(`${search.label} search failed:`, outcome.reason);
+    }
+  });
+
+  const firstResult = entries.find(([, search]) => search.results.length > 0);
+  if (firstResult) {
+    activeSearchType.value = firstResult[0];
+  }
+  isLoading.value = false;
+};
+
+const invalidateSearch = () => {
+  searchGeneration++;
+  clearTimeout(searchTimer);
+  clearTimeout(ghostLoaderTimer);
+};
+
+const clearSearch = () => {
+  invalidateSearch();
+  searchQuery.value = '';
+  resetResults();
+  isLoading.value = false;
+};
+
+const debouncedSearch = () => {
+  const query = searchQuery.value;
+  if (!query) {
     clearSearch();
     return;
   }
 
-  isLoading.value = true;
-  movieResults.value = [];
-  tvResults.value = [];
-  movieSearchError.value = false;
-  tvSearchError.value = false;
+  invalidateSearch();
+  const generation = searchGeneration;
+  ghostLoaderTimer = setTimeout(() => {
+    isLoading.value = true;
+  }, 300);
+  searchTimer = setTimeout(() => doSearch(query, generation), 1000);
+};
 
-  const [moviePromise, tvPromise] = await Promise.allSettled([
-    $fetch(`/api/search?type=movie&query=${searchQuery.value}`),
-    $fetch(`/api/search?type=tv&query=${searchQuery.value}`)
-  ]);
+const submitDownload = async (item, type, seasons) => {
+  if (item.submitting) return;
+  item.submitting = true;
+  item.error = '';
 
-  isLoading.value = false;
-
-  if (moviePromise.status === 'fulfilled') {
-    movieResults.value = moviePromise.value;
-    movieToggleDisabled.value = moviePromise.value.length === 0;
-  } else {
-    console.error('Movie search failed:', moviePromise.reason);
-    movieSearchError.value = true;
-    movieToggleDisabled.value = true;
-  }
-
-  if (tvPromise.status === 'fulfilled') {
-    tvResults.value = tvPromise.value;
-    tvToggleDisabled.value = tvPromise.value.length === 0;
-  } else {
-    console.error('TV search failed:', tvPromise.reason);
-    tvSearchError.value = true;
-    tvToggleDisabled.value = true;
-  }
-
-  if (movieResults.value.length > 0) {
-    activeSearchType.value = 'movie';
-  } else if (tvResults.value.length > 0) {
-    activeSearchType.value = 'tv';
+  try {
+    await $fetch('/api/download', {
+      method: 'POST',
+      body: { type, id: item.id, title: item.title, year: item.year, seasons },
+    });
+    void updateQueue();
+  } catch (error) {
+    console.error(`Error submitting ${type} download:`, error);
+    item.error = 'Download failed.';
+  } finally {
+    item.submitting = false;
   }
 };
 
-const clearSearch = () => {
-  searchQuery.value = '';
-  movieResults.value = [];
-  tvResults.value = [];
-  movieToggleDisabled.value = true;
-  tvToggleDisabled.value = true;
-  movieSearchError.value = false;
-  tvSearchError.value = false;
-  isLoading.value = false;
-  clearTimeout(searchTimer);
-  clearTimeout(ghostLoaderTimer);
-};
-
-const debouncedSearch = () => {
-  clearTimeout(searchTimer);
-  clearTimeout(ghostLoaderTimer);
-
-  if (searchQuery.value.length > 0) {
-    ghostLoaderTimer = setTimeout(() => {
-      isLoading.value = true;
-    }, 300);
-
-    searchTimer = setTimeout(doSearch, 1000);
-  } else {
-    clearSearch();
-  }
-};
-
-const handleDownload = (item) => {
-  if (activeSearchType.value === 'tv') {
+const handleDownload = (item, type) => {
+  if (type === 'tv') {
     selectedTvShow.value = item;
-    showSeasonModal.value = true;
   } else {
-    sendMovieToDownloadClient(item);
+    return submitDownload(item, type);
   }
 };
 
-const sendMovieToDownloadClient = async (item) => {
-  item.downloading = true;
-  item.error = '';
-
-  try {
-    await $fetch('/api/download', {
-      method: 'POST',
-      body: { ...item, type: 'movie' }
-    });
-    await updateQueue();
-  } catch (error) {
-    console.error(`Error sending movie to client:`, error);
-    item.error = 'Download failed.';
-  }
-};
-
-const sendTvShowToDownloadClient = async (selectedSeasons) => {
-  showSeasonModal.value = false;
+const submitTvDownload = (seasons) => {
   const item = selectedTvShow.value;
-  item.downloading = true;
-  item.error = '';
-
-  try {
-    await $fetch('/api/download', {
-      method: 'POST',
-      body: { ...item, type: 'tv', seasons: selectedSeasons }
-    });
-    await updateQueue();
-  } catch (error) {
-    console.error(`Error sending tv show to client:`, error);
-    item.error = 'Download failed.';
-  }
+  selectedTvShow.value = null;
+  if (item) return submitDownload(item, 'tv', seasons);
 };
 
 const updateQueue = async () => {
+  const generation = ++queueGeneration;
   try {
-    queue.value = await $fetch('/api/queue');
-
-    const allResults = [...movieResults.value, ...tvResults.value];
-    allResults.forEach(item => {
-      if (item.downloading && queue.value.some(q => (q.movie && q.movie.tmdbId === item.id) || (q.series && q.series.tvdbId === item.id))) {
-        item.downloading = false;
-      }
-    });
-
+    const entries = await $fetch('/api/queue');
+    if (generation === queueGeneration) queue.value = entries;
   } catch (error) {
     console.error('Error updating queue:', error);
   }
@@ -243,7 +206,13 @@ const updateQueue = async () => {
 
 onMounted(() => {
   updateQueue();
-  setInterval(updateQueue, 10000);
+  queueTimer = setInterval(updateQueue, 10000);
+});
+
+onUnmounted(() => {
+  invalidateSearch();
+  queueGeneration++;
+  clearInterval(queueTimer);
 });
 </script>
 

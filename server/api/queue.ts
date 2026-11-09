@@ -1,7 +1,17 @@
 import { defineEventHandler } from 'h3';
-import { $fetch } from 'ofetch';
+import { fetchArr } from '../utils/arr-fetch';
 
-const processQueue = (records) => {
+interface QueueRecord {
+  id: number;
+  downloadId?: string;
+  title: string;
+  status: string;
+  timeleft?: string;
+  size: number;
+  sizeleft: number;
+}
+
+const processQueue = (records: QueueRecord[]) => {
   return records.map(item => {
     const totalSize = item.size;
     const sizeLeft = item.sizeleft;
@@ -18,39 +28,26 @@ const processQueue = (records) => {
   });
 };
 
-const getRadarrQueue = async () => {
-  const config = useRuntimeConfig();
-  if (!config.radarrUrl || !config.radarrApiKey) {
-    console.warn('Radarr URL or API key is not configured.');
+const getQueue = async (service: string, baseUrl: string, apiKey: string) => {
+  if (!baseUrl || !apiKey) {
+    console.warn(`${service} URL or API key is not configured.`);
     return [];
   }
-  const queue = await $fetch(`${config.radarrUrl}/api/v3/queue`, {
-    headers: { 'X-Api-Key': config.radarrApiKey },
-  });
+
+  const queue = await fetchArr<{ records?: QueueRecord[] }>(baseUrl, apiKey, '/queue');
   return processQueue(queue.records || []);
 };
 
-const getSonarrQueue = async () => {
-  const config = useRuntimeConfig();
-  if (!config.sonarrUrl || !config.sonarrApiKey) {
-    console.warn('Sonarr URL or API key is not configured.');
-    return [];
-  }
-  const queue = await $fetch(`${config.sonarrUrl}/api/v3/queue`, {
-    headers: { 'X-Api-Key': config.sonarrApiKey },
-  });
-  return processQueue(queue.records || []);
-};
-
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  const config = useRuntimeConfig(event);
   try {
     const [radarrQueue, sonarrQueue] = await Promise.all([
-      getRadarrQueue(),
-      getSonarrQueue(),
+      getQueue('Radarr', config.radarrUrl, config.radarrApiKey),
+      getQueue('Sonarr', config.sonarrUrl, config.sonarrApiKey),
     ]);
     return [...radarrQueue, ...sonarrQueue];
-  } catch (error) {
-    console.error('Error fetching queues:', error);
+  } catch {
+    console.error('Error fetching queues');
     return [];
   }
 });

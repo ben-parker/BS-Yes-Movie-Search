@@ -27,11 +27,11 @@
           </button>
           <button
             v-else
-            :disabled="item.downloading"
+            :disabled="item.submitting"
             class="btn btn-primary"
             @click="download"
           >
-            <span v-if="item.downloading" class="loader"></span>
+            <span v-if="item.submitting" class="loader"></span>
             <span v-else>Download</span>
           </button>
           <div
@@ -52,10 +52,6 @@ import { computed } from 'vue';
 const props = defineProps({
   item: {
     type: Object,
-    required: true
-  },
-  searchType: {
-    type: String,
     required: true
   }
 });

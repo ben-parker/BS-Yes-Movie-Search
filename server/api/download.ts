@@ -1,16 +1,11 @@
-import { defineEventHandler, readBody } from 'h3';
-import { $fetch } from 'ofetch';
+import { createError, defineEventHandler, readBody } from 'h3';
+import { fetchArr } from '../utils/arr-fetch';
 
-const sendToRadarr = async (movie) => {
-  const config = useRuntimeConfig();
-  if (!config.radarrApiKey) {
-    throw new Error('Radarr API key is not configured.');
-  }
-
+const sendToRadarr = async (movie, config) => {
   const payload = {
     tmdbId: movie.id,
-    title: movie.original_title,
-    year: parseInt(movie.release_date.slice(0, 4)),
+    title: movie.title,
+    year: Number(movie.year),
     qualityProfileId: config.radarrQualityProfileId,
     rootFolderPath: config.radarrRootFolderPath,
     monitored: true,
@@ -19,21 +14,13 @@ const sendToRadarr = async (movie) => {
     },
   };
 
-  await $fetch(`${config.radarrUrl}/movie`, {
+  await fetchArr(config.radarrUrl, config.radarrApiKey, '/movie', {
     method: 'POST',
-    headers: {
-      'X-Api-Key': config.radarrApiKey,
-    },
     body: payload,
   });
 };
 
-const sendToSonarr = async (tvShow) => {
-  const config = useRuntimeConfig();
-  if (!config.sonarrApiKey) {
-    throw new Error('Sonarr API key is not configured.');
-  }
-
+const sendToSonarr = async (tvShow, config) => {
   const seasonsToMonitor = tvShow.seasons.map(seasonNumber => ({
     seasonNumber,
     monitored: true,
@@ -51,30 +38,31 @@ const sendToSonarr = async (tvShow) => {
     },
   };
 
-  await $fetch(`${config.sonarrUrl}/api/v3/series`, {
+  await fetchArr(config.sonarrUrl, config.sonarrApiKey, '/series', {
     method: 'POST',
-    headers: {
-      'X-Api-Key': config.sonarrApiKey,
-    },
     body: payload,
   });
 };
 
 export default defineEventHandler(async (event) => {
   const body = await readBody(event);
-  const { type, ...item } = body;
+  const { type, ...item } = body ?? {};
+  if (type !== 'movie' && type !== 'tv') {
+    throw createError({ statusCode: 400, statusMessage: 'Invalid download type' });
+  }
+
+  const config = useRuntimeConfig(event);
 
   try {
     if (type === 'movie') {
-      await sendToRadarr(item);
-    } else if (type === 'tv') {
-      await sendToSonarr(item);
+      await sendToRadarr(item, config);
     } else {
-      throw new Error('Invalid type specified');
+      await sendToSonarr(item, config);
     }
-    return { status: 'ok' };
-  } catch (error) {
-    console.error(`Error processing download request: ${error.message}`);
-    return { status: 'error', message: error.message };
+  } catch {
+    console.error(`Error submitting ${type} download`);
+    throw createError({ statusCode: 502, statusMessage: 'Download service unavailable' });
   }
+
+  return { status: 'ok' };
 });

@@ -1,48 +1,30 @@
-import { defineEventHandler, getQuery } from 'h3';
+import { createError, defineEventHandler, getQuery } from 'h3';
 import { $fetch } from 'ofetch';
 import { useStorage } from 'nitropack/runtime';
+import { fetchArr } from '../utils/arr-fetch';
 
 const tvdbStorage = useStorage('tvdb');
 
-const getSonarrLibraryIds = async () => {
-  const config = useRuntimeConfig();
-  if (!config.sonarrUrl || !config.sonarrApiKey) return new Set();
+const getLibraryIds = async (baseUrl: string, apiKey: string, path: string, idField: 'tmdbId' | 'tvdbId') => {
+  if (!baseUrl || !apiKey) return new Set<number>();
+
   try {
-    const seriesUrl = `${config.sonarrUrl}/api/v3/series`;
-    const headers = { 'X-Api-Key': config.sonarrApiKey };
-    const allSeries = await $fetch(seriesUrl, { headers });
-    const tvdbIds = allSeries.map(series => series.tvdbId);
-    return new Set(tvdbIds);
-  } catch (error) {
-    console.error('Error fetching Sonarr library:', error);
-    return new Set();
+    const records = await fetchArr<Partial<Record<typeof idField, number>>[]>(baseUrl, apiKey, path);
+    return new Set(records.map(record => record[idField]));
+  } catch {
+    console.error(`Error fetching library at ${path}`);
+    return new Set<number>();
   }
 };
 
-const getRadarrLibraryIds = async () => {
-  const config = useRuntimeConfig();
-  if (!config.radarrUrl || !config.radarrApiKey) return new Set();
-  try {
-    const moviesUrl = `${config.radarrUrl}/api/v3/movie`;
-    const headers = { 'X-Api-Key': config.radarrApiKey };
-    const allMovies = await $fetch(moviesUrl, { headers });
-    const tmdbIds = allMovies.map(movie => movie.tmdbId);
-    return new Set(tmdbIds);
-  } catch (error) {
-    console.error('Error fetching Radarr library:', error);
-    return new Set();
-  }
-};
-
-const getTvdbToken = async () => {
-  const config = useRuntimeConfig();
+const getTvdbToken = async (config) => {
   const cachedToken = await tvdbStorage.getItem('token');
   if (cachedToken && cachedToken.expires > Date.now()) {
     return cachedToken.token;
   }
   const response = await $fetch('https://api4.thetvdb.com/v4/login', {
     method: 'POST',
-    body: { apikey: config.thetvdbApiKey, pin: config.thetvdbPin },
+    body: { apikey: config.thetvdbApiKey },
   });
   const token = response.data.token;
   const decodedToken = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
@@ -51,12 +33,11 @@ const getTvdbToken = async () => {
   return token;
 };
 
-const searchTmdb = async (query) => {
-  const config = useRuntimeConfig();
+const searchTmdb = async (query, config) => {
   const tmdbApiUrl = 'https://api.themoviedb.org/3/search/movie';
   const [data, libraryIds] = await Promise.all([
     $fetch(tmdbApiUrl, { params: { api_key: config.tmdbApiKey, query: query } }),
-    getRadarrLibraryIds()
+    getLibraryIds(config.radarrUrl, config.radarrApiKey, '/movie', 'tmdbId')
   ]);
 
   const topTenRelevant = data.results
@@ -78,10 +59,10 @@ const searchTmdb = async (query) => {
   });
 };
 
-const searchTheTvDb = async (query) => {
+const searchTheTvDb = async (query, config) => {
   const [token, libraryIds] = await Promise.all([
-    getTvdbToken(),
-    getSonarrLibraryIds()
+    getTvdbToken(config),
+    getLibraryIds(config.sonarrUrl, config.sonarrApiKey, '/series', 'tvdbId')
   ]);
   
   const thetvdbApiUrl = 'https://api4.thetvdb.com/v4';
@@ -101,8 +82,8 @@ const searchTheTvDb = async (query) => {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         return { ...show, seasons: extendedData.data.seasons };
-      } catch (error) {
-        console.error(`Failed to fetch extended data for ${show.name}:`, error);
+      } catch {
+        console.error(`Failed to fetch extended data for ${show.name}`);
         return { ...show, seasons: [] };
       }
     })
@@ -135,8 +116,13 @@ const searchTheTvDb = async (query) => {
 export default defineEventHandler(async (event) => {
   const { type, query } = getQuery(event);
   if (!query) return [];
-  if (type === 'movie') return searchTmdb(query);
-  return searchTheTvDb(query);
+  const config = useRuntimeConfig(event);
+  try {
+    if (type === 'movie') return await searchTmdb(query, config);
+    return await searchTheTvDb(query, config);
+  } catch {
+    throw createError({ statusCode: 502, statusMessage: 'Search service unavailable' });
+  }
 });
 
 
