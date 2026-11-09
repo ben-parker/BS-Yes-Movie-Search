@@ -3,7 +3,13 @@
     <div class="modal-content">
       <h3 class="modal-title">Select Seasons for {{ item.title }}</h3>
       
-      <div class="season-list">
+      <p v-if="status === 'idle' || status === 'pending'" class="season-message" role="status">Loading seasons…</p>
+      <div v-else-if="status === 'error'" class="season-message">
+        <p role="alert">Couldn’t load seasons.</p>
+        <button type="button" class="btn btn-secondary" @click="refresh()">Retry</button>
+      </div>
+      <p v-else-if="!localSelectedSeasons.length" class="season-message">No seasons listed.</p>
+      <div v-else class="season-list">
         <div v-for="season in localSelectedSeasons" :key="season.number" class="season-item">
           <input
             type="checkbox"
@@ -15,14 +21,14 @@
       </div>
 
       <div class="modal-actions">
-        <div class="selection-tools">
+        <div v-if="status === 'success' && localSelectedSeasons.length" class="selection-tools">
           <a href="#" @click.prevent="selectAll">Select All</a>
           <span class="separator">|</span>
           <a href="#" @click.prevent="selectNone">Select None</a>
         </div>
         <div class="buttons">
-          <button class="btn btn-secondary" @click="$emit('close')">Cancel</button>
-          <button class="btn btn-primary" @click="submit">Download</button>
+          <button type="button" class="btn btn-secondary" @click="$emit('close')">Cancel</button>
+          <button type="button" class="btn btn-primary" :disabled="status !== 'success'" @click="submit">Download</button>
         </div>
       </div>
     </div>
@@ -30,7 +36,7 @@
 </template>
 
 <script setup>
-import { ref, watchEffect } from 'vue';
+import { onUnmounted, ref, watch } from 'vue';
 
 const props = defineProps({
   item: {
@@ -40,19 +46,22 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['close', 'submit']);
-
 const localSelectedSeasons = ref([]);
-
-watchEffect(() => {
-  if (props.item && Array.isArray(props.item.seasons)) {
-    localSelectedSeasons.value = props.item.seasons.map(seasonNumber => ({
-      number: seasonNumber,
-      name: `Season ${seasonNumber}`,
-      // Select season 1 by default, if it exists
-      selected: seasonNumber === 1
-    }));
-  }
+const { data: seasons, status, refresh, clear } = useFetch(() => `/api/tv-seasons/${props.item.id}`, {
+  server: false,
+  retry: 0,
+  timeout: 8000,
 });
+
+watch(seasons, (numbers) => {
+  localSelectedSeasons.value = (numbers ?? []).map(number => ({
+    number,
+    name: `Season ${number}`,
+    selected: number === 1,
+  }));
+}, { immediate: true });
+
+onUnmounted(clear);
 
 const selectAll = () => {
   localSelectedSeasons.value.forEach(s => s.selected = true);
@@ -112,6 +121,10 @@ const submit = () => {
   border-radius: 4px;
 }
 
+.season-message {
+  margin: 0 0 1.25rem;
+}
+
 .season-item {
   display: flex;
   align-items: center;
@@ -155,6 +168,11 @@ const submit = () => {
 .btn-primary {
   background-color: #1976D2;
   color: #ffffff;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .btn-secondary {

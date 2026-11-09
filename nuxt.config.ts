@@ -3,6 +3,11 @@ import { defineNuxtConfig } from "nuxt/config";
 export default defineNuxtConfig({
   compatibilityDate: '2025-06-29',
   modules: [],
+  nitro: {
+    storage: {
+      providerCache: { driver: 'lru-cache', max: 1000 }
+    }
+  },
   app: {
     head: {
       title: 'BS!Yes! Movie Search',

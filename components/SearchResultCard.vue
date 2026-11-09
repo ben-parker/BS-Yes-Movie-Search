@@ -14,7 +14,10 @@
 
     <div class="card-content">
       <h2 class="title">{{ item.title }}</h2>
-      <span class="release-year">{{ item.year || 'Year unknown' }}</span>
+      <div class="metadata">
+        <span class="release-year">{{ item.year || 'Year unknown' }}</span>
+        <span v-if="item.language || item.studio" class="metadata-label">{{ item.language || item.studio }}</span>
+      </div>
       <p v-if="item.overview" class="overview">{{ item.overview }}</p>
 
       <div class="actions">
@@ -85,8 +88,15 @@ const download = () => {
   line-height: 1.25;
 }
 
-.release-year {
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
   margin-top: 0.375rem;
+}
+
+.release-year,
+.metadata-label {
   padding: 0.125rem 0.5rem;
   border-radius: 6px;
   background: #e9eef4;
@@ -95,6 +105,12 @@ const download = () => {
   font-weight: 700;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
+}
+
+.metadata-label {
+  background: #f1f1f1;
+  color: #424242;
+  font-weight: 600;
 }
 
 .overview {

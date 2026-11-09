@@ -2,14 +2,33 @@
   <div class="app-container">
     <main class="main-content">
       <div class="container">
-        <DownloadQueue :queue="queue" />
-
         <div class="bsyes-logo-wrapper">
           <img src="/images/bsyes.png" alt="BS!Yes! Movie Search" class="bsyes-logo">
         </div>
 
         <div class="search-container">
-          <form class="search-wrapper" role="search" @submit.prevent="submitSearch">
+          <div class="toggle-wrapper" role="group" aria-label="Views">
+            <button
+              v-for="(search, type) in searches"
+              :key="type"
+              type="button"
+              :aria-pressed="!showDownloads && activeSearchType === type"
+              @click="selectSearchType(type)"
+            >
+              {{ search.label }}
+            </button>
+            <button
+              type="button"
+              :aria-pressed="showDownloads"
+              :disabled="!queue.length"
+              @click="selectDownloads"
+            >
+              Downloads<span v-if="queue.length"> ({{ queue.length }})</span>
+            </button>
+          </div>
+
+          <DownloadQueue v-if="showDownloads" :queue="queue" />
+          <form v-else class="search-wrapper" role="search" @submit.prevent="submitSearch">
             <input
               ref="searchInput"
               v-model="searchQuery"
@@ -30,21 +49,9 @@
             </button>
           </form>
 
-          <div class="toggle-wrapper" role="group" aria-label="Search type">
-            <button
-              v-for="(search, type) in searches"
-              :key="type"
-              type="button"
-              :aria-pressed="activeSearchType === type"
-              @click="selectSearchType(type)"
-            >
-              {{ search.label }}
-            </button>
-          </div>
-
           <p class="visually-hidden" role="status">{{ searchAnnouncement }}</p>
           <section
-            v-if="query"
+            v-if="!showDownloads && query"
             :aria-label="activeSearch.label + ' results'"
             :aria-busy="activeSearch.status === 'loading' || activeSearch.loadingMore"
           >
@@ -68,7 +75,7 @@
               </div>
 
               <ul v-else class="search-results">
-                <li v-for="item in activeSearch.results" :key="item.id">
+                <li v-for="item in orderedResults" :key="item.id">
                   <SearchResultCard :item="item" @download="handleDownload($event, activeSearchType)" />
                 </li>
               </ul>
@@ -122,6 +129,24 @@ const searches = reactive({
 });
 const activeSearchType = ref('movie');
 const activeSearch = computed(() => searches[activeSearchType.value]);
+const showDownloads = ref(false);
+const movieTitleGroups = computed(() => {
+  // Map order keeps each title at the relevance rank of its first match.
+  const moviesByTitle = new Map();
+  for (const movie of searches.movie.results) {
+    const title = movie.title.trim().replace(/\s+/g, ' ').toLowerCase();
+    if (!moviesByTitle.has(title)) moviesByTitle.set(title, []);
+    moviesByTitle.get(title).push(movie);
+  }
+  return Array.from(moviesByTitle.values());
+});
+const orderedResults = computed(() => {
+  if (activeSearchType.value !== 'movie') return activeSearch.value.results;
+
+  return movieTitleGroups.value.flatMap(movies =>
+    [...movies].sort((a, b) => Number(b.year) - Number(a.year))
+  );
+});
 const queue = ref([]);
 const selectedTvShow = ref(null);
 let searchTimer = null;
@@ -130,6 +155,7 @@ let queueTimer = null;
 let queueGeneration = 0;
 
 const searchAnnouncement = computed(() => {
+  if (showDownloads.value) return queue.value.length ? '' : 'No active downloads.';
   const { status, subject, results, loadingMore, loadMoreFailed } = activeSearch.value;
   if (status === 'loading') return `Searching ${subject}…`;
   if (status === 'error') return `Couldn’t search ${subject}. Please try again.`;
@@ -156,7 +182,7 @@ const runSearch = async (append = false) => {
   clearTimeout(searchTimer);
   const type = activeSearchType.value;
   const search = activeSearch.value;
-  if (!query.value || searchController || (append && !search.hasMore)) return;
+  if (showDownloads.value || !query.value || searchController || (append && !search.hasMore)) return;
   const page = append ? search.page + 1 : 1;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
@@ -220,11 +246,19 @@ const submitSearch = () => {
 };
 
 const selectSearchType = (type) => {
-  if (type === activeSearchType.value) return;
+  if (!showDownloads.value && type === activeSearchType.value) return;
 
   cancelSearch();
+  showDownloads.value = false;
   activeSearchType.value = type;
   if (activeSearch.value.status === 'idle') void runSearch();
+};
+
+const selectDownloads = () => {
+  if (showDownloads.value || !queue.value.length) return;
+
+  cancelSearch();
+  showDownloads.value = true;
 };
 
 const clearSearch = () => {
@@ -237,7 +271,7 @@ watch(query, () => {
   for (const search of Object.values(searches)) {
     Object.assign(search, emptySearch());
   }
-  if (query.value) {
+  if (query.value && !showDownloads.value) {
     activeSearch.value.status = 'loading';
     searchTimer = setTimeout(runSearch, 350);
   }
@@ -334,6 +368,7 @@ onUnmounted(() => {
 
 .search-wrapper {
   position: relative;
+  margin-bottom: 1rem;
 }
 
 .search-input {
@@ -366,9 +401,9 @@ onUnmounted(() => {
 
 .toggle-wrapper {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.25rem;
-  margin: 0.75rem 0 1rem;
+  margin: 0 0 1rem;
   padding: 0.25rem;
   border-radius: 12px;
   background: #f1f1f1;
@@ -376,19 +411,31 @@ onUnmounted(() => {
 
 .toggle-wrapper button {
   min-height: 44px;
-  padding: 0.5rem;
+  padding: 0.5rem 0.25rem;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: #424242;
   font: inherit;
+  font-size: 0.875rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
 .toggle-wrapper button[aria-pressed="true"] {
   background: #b8351b;
   color: #ffffff;
+}
+
+.toggle-wrapper button:disabled {
+  color: #737373;
+  cursor: default;
+}
+
+.toggle-wrapper button[aria-pressed="true"]:disabled {
+  background: #e0e0e0;
+  color: #424242;
 }
 
 .search-input:focus-visible,
