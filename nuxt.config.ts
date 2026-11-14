@@ -12,7 +12,7 @@ export default defineNuxtConfig({
     head: {
       title: 'BS!Yes! Movie Search',
       link: [
-        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg?v=2' }
       ]
     }
   },

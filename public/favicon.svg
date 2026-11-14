@@ -1,3 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <text y=".9em" font-size="90">❤️</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <path d="M16 27 5.8 17C-1 10.2 8.1.9 15 7.9l1 1 1-1C23.9.9 33 10.2 26.2 17Z"
+    fill="#ed294b" stroke="#74152c" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M7.3 12a4.1 4.1 0 0 1 4.1-4.1" fill="none"
+    stroke="#ff9bab" stroke-width="1.7" stroke-linecap="round"/>
 </svg>

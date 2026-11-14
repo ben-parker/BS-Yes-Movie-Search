@@ -76,7 +76,11 @@
 
               <ul v-else class="search-results">
                 <li v-for="item in orderedResults" :key="item.id">
-                  <SearchResultCard :item="item" @download="handleDownload($event, activeSearchType)" />
+                  <SearchResultCard
+                    :item="item"
+                    :download-state="downloadState(item, activeSearchType)"
+                    @download="handleDownload($event, activeSearchType)"
+                  />
                 </li>
               </ul>
 
@@ -148,6 +152,9 @@ const orderedResults = computed(() => {
   );
 });
 const queue = ref([]);
+const downloadRequests = reactive(new Map());
+const downloadKey = (type, id) => `${type}:${id}`;
+const noDownloadTimeout = 120000;
 const selectedTvShow = ref(null);
 let searchTimer = null;
 let searchController = null;
@@ -277,27 +284,52 @@ watch(query, () => {
   }
 }, { flush: 'sync' });
 
+const matchingDownloads = (entries, type, arrId, seasons) => entries.filter(entry =>
+  arrId && entry.type === type && entry.arrId === arrId && !entry.blocked &&
+  (!seasons || entry.season == null || seasons.includes(entry.season))
+);
+
+const downloadState = (item, type) => {
+  const request = downloadRequests.get(downloadKey(type, item.id));
+  if (request) return request.state;
+  if (item.inLibrary) return 'inLibrary';
+
+  const matches = matchingDownloads(queue.value, type, item.arrId);
+  if (matches.some(entry => entry.transferring)) return 'downloading';
+  return matches.length ? 'queued' : 'available';
+};
+
 const submitDownload = async (item, type, seasons) => {
-  if (item.submitting) return;
-  item.submitting = true;
+  const key = downloadKey(type, item.id);
+  const previous = downloadRequests.get(key);
+  const state = downloadState(item, type);
+  if (state !== 'available' && state !== 'stalled') return;
+
+  const request = reactive({ type, seasons, state: 'queued', arrId: undefined, lastSeen: 0 });
+  downloadRequests.set(key, request);
   item.error = '';
 
   try {
-    await $fetch('/api/download', {
+    const { arrId } = await $fetch('/api/download', {
       method: 'POST',
-      body: { type, id: item.id, title: item.title, year: item.year, seasons },
+      body: { type, id: item.id, title: item.title, year: item.year, seasons, arrId: previous?.arrId ?? item.arrId },
     });
+    request.arrId = arrId;
+    request.lastSeen = Date.now();
     void updateQueue();
   } catch (error) {
     console.error(`Error submitting ${type} download:`, error);
+    if (previous) downloadRequests.set(key, previous);
+    else downloadRequests.delete(key);
     item.error = 'Download failed.';
-  } finally {
-    item.submitting = false;
   }
 };
 
 const handleDownload = (item, type) => {
-  if (type === 'tv') {
+  const request = downloadRequests.get(downloadKey(type, item.id));
+  if (request?.state === 'stalled') {
+    void submitDownload(item, type, request.seasons);
+  } else if (type === 'tv') {
     selectedTvShow.value = item;
   } else {
     return submitDownload(item, type);
@@ -312,9 +344,32 @@ const submitTvDownload = (seasons) => {
 
 const updateQueue = async () => {
   const generation = ++queueGeneration;
+  const pending = [...downloadRequests.values()].filter(request => request.arrId && request.state !== 'inLibrary');
+  const tracked = pending.map(({ type, arrId, seasons }) => ({ type, arrId, seasons }));
   try {
-    const entries = await $fetch('/api/queue');
-    if (generation === queueGeneration) queue.value = entries;
+    const { entries, imports, unavailable } = await $fetch('/api/queue', {
+      query: { tracked: JSON.stringify(tracked) },
+    });
+    if (generation !== queueGeneration) return;
+
+    queue.value = [...entries, ...queue.value.filter(entry => unavailable[entry.type])];
+    const now = Date.now();
+    pending.forEach((request, index) => {
+      if (imports[index] === true) {
+        request.state = 'inLibrary';
+        return;
+      }
+      if (unavailable[request.type]) return;
+
+      const matches = matchingDownloads(entries, request.type, request.arrId, request.seasons);
+      if (matches.length) {
+        request.lastSeen = now;
+        if (matches.some(entry => entry.transferring)) request.state = 'downloading';
+        else if (request.state === 'stalled') request.state = 'queued';
+      } else if (imports[index] === false && now - request.lastSeen >= noDownloadTimeout) {
+        request.state = 'stalled';
+      }
+    });
   } catch (error) {
     console.error('Error updating queue:', error);
   }

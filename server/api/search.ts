@@ -1,5 +1,6 @@
 import { createError, defineEventHandler, getQuery } from 'h3';
 import { fetchArr } from '../utils/arr-fetch';
+import { movieHasFile, type ArrMovie, type ArrSeries } from '../utils/arr-library';
 import { cachedProvider, fetchProvider } from '../utils/provider-cache';
 import { fetchTvdb } from '../utils/tvdb';
 
@@ -29,24 +30,22 @@ type TvSearch = {
   }[];
 };
 
-const getLibraryIds = async (baseUrl: string, apiKey: string, path: string, idField: 'tmdbId' | 'tvdbId', signal: AbortSignal) => {
-  if (!baseUrl || !apiKey) return new Set<number>();
+const getLibrary = async <T,>(baseUrl: string, apiKey: string, path: string, getId: (record: T) => number, signal: AbortSignal) => {
+  if (!baseUrl || !apiKey) return new Map<number, T>();
 
   try {
     const librarySignal = AbortSignal.any([signal, AbortSignal.timeout(3000)]);
-    const records = await fetchArr<Partial<Record<typeof idField, number>>[]>(baseUrl, apiKey, path, {
-      signal: librarySignal,
-    });
-    return new Set(records.map(record => record[idField]));
+    const records = await fetchArr<T[]>(baseUrl, apiKey, path, { signal: librarySignal });
+    return new Map(records.map(record => [getId(record), record]));
   } catch {
     signal.throwIfAborted();
     console.error(`Error fetching library at ${path}`);
-    return new Set<number>();
+    return new Map<number, T>();
   }
 };
 
 const searchTmdb = async (query: string, config: Config, page: number, signal: AbortSignal) => {
-  const [movies, libraryIds] = await Promise.all([
+  const [movies, library] = await Promise.all([
     cachedProvider('tmdb', ['search', query, page], async () => {
       const response = await fetchProvider<MovieSearch>('tmdb', 'https://api.themoviedb.org/3/search/movie', {
         params: { api_key: config.tmdbApiKey, query, page },
@@ -64,14 +63,20 @@ const searchTmdb = async (query: string, config: Config, page: number, signal: A
       }));
       return { ...response, value: { results, hasMore: page < Math.min(response.data.total_pages, maxTmdbPage) } };
     }, movies => movies.results.length ? 600 : 60),
-    getLibraryIds(config.radarrUrl, config.radarrApiKey, '/movie', 'tmdbId', signal),
+    getLibrary<ArrMovie>(config.radarrUrl, config.radarrApiKey, '/movie', movie => movie.tmdbId, signal),
   ]);
 
-  return { ...movies, results: movies.results.map(movie => ({ ...movie, inLibrary: libraryIds.has(movie.id) })) };
+  return {
+    ...movies,
+    results: movies.results.map(movie => {
+      const record = library.get(movie.id);
+      return { ...movie, arrId: record?.id, inLibrary: movieHasFile(record) };
+    }),
+  };
 };
 
 const searchTheTvDb = async (query: string, config: Config, signal: AbortSignal) => {
-  const [shows, libraryIds] = await Promise.all([
+  const [shows, library] = await Promise.all([
     cachedProvider('tvdb', ['search', query], async () => {
       const response = await fetchTvdb<TvSearch>('/search', config.thetvdbApiKey, signal, { query, type: 'series' });
       const value = response.data.data
@@ -88,9 +93,12 @@ const searchTheTvDb = async (query: string, config: Config, signal: AbortSignal)
         }));
       return { ...response, value };
     }, shows => shows.length ? 600 : 60),
-    getLibraryIds(config.sonarrUrl, config.sonarrApiKey, '/series', 'tvdbId', signal),
+    getLibrary<ArrSeries>(config.sonarrUrl, config.sonarrApiKey, '/series', show => show.tvdbId, signal),
   ]);
-  return shows.map(show => ({ ...show, inLibrary: libraryIds.has(show.id) }));
+  return shows.map(show => {
+    const record = library.get(show.id);
+    return { ...show, arrId: record?.id, inLibrary: (record?.statistics?.episodeFileCount ?? 0) > 0 };
+  });
 };
 
 export default defineEventHandler(async (event) => {

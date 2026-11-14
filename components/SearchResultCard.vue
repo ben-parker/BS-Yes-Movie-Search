@@ -20,11 +20,12 @@
       </div>
       <p v-if="item.overview" class="overview">{{ item.overview }}</p>
 
-      <div class="actions">
-        <span v-if="item.inLibrary" class="library-status">In Library</span>
-        <button v-else type="button" class="download-button" :disabled="item.submitting" @click="download">
-          {{ item.submitting ? 'Submitting…' : 'Download' }}
+      <div class="actions" aria-live="polite">
+        <span v-if="downloadState === 'inLibrary'" class="library-status">In Library</span>
+        <button v-else type="button" class="download-button" :disabled="downloadPending" @click="download">
+          {{ downloadLabel }}
         </button>
+        <span v-if="downloadState === 'stalled'" class="download-error">No download found.</span>
         <span v-if="item.error" class="download-error" role="alert">{{ item.error }}</span>
       </div>
     </div>
@@ -32,12 +33,19 @@
 </template>
 
 <script setup>
+import { computed } from 'vue';
+
 const props = defineProps({
   item: {
     type: Object,
     required: true
-  }
+  },
+  downloadState: { type: String, required: true },
 });
+
+const labels = { queued: 'Queued', downloading: 'Downloading', stalled: 'Retry search' };
+const downloadLabel = computed(() => labels[props.downloadState] ?? 'Download');
+const downloadPending = computed(() => ['queued', 'downloading'].includes(props.downloadState));
 
 const emit = defineEmits(['download']);
 

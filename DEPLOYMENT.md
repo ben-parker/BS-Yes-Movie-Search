@@ -42,7 +42,13 @@ On your Unraid server, go to the "Docker" tab and click "Add Container". Fill in
 -   **Name:** bs-yes-movie-search
 -   **Repository:** your-dockerhub-username/bs-yes-movie-search
 -   **Network Type:** Bridge
--   **WebUI:** http://[YOUR_UNRAID_IP]:3000
+-   **Port:** map container port `3000` to the host port you want to use.
+
+In **Advanced View**, set **WebUI** to `http://[IP]:[PORT:3000]/`. Unraid uses the
+mapped host port when you select **WebUI** from the container's menu. For **Icon
+URL**, use the app's PNG at `http://YOUR_UNRAID_IP:YOUR_HOST_PORT/images/app-icon.png`.
+For an existing container, update the image and start it before setting the icon
+URL so Unraid can retrieve the PNG.
 
 Add the following environment variables:
 
